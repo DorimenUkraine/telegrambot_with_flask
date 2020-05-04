@@ -7,7 +7,6 @@ import logging
 from app import db, app
 from models import Users
 from dotenv import load_dotenv
-
 load_dotenv()
 
 ############################### НАСТРОЙКИ ПОДКЛЮЧЕНИЯ К ТЕЛЕГРАМУ ############################################
@@ -77,9 +76,14 @@ def parse_text(chat_id, last_name, first_name, username, text_msg):
             try:
                 find_user_in_db(username, first_name, last_name)
             except NameError:
-                print("user не отработал")
+                logger.info("Локальное или глобальное имя не найдено")
+            except ImportError:
+                logger.info("Оператор import не может найти определение модуля!")
+            except ValueError:
+                logger.info("Встроенная операция или функция получает аргумент, тип которого правильный, но неправильно значение")
             except:
-                print("An exception occurred")
+                logger.info("Some other error occurred!")
+
             finally:
 
                 message = f'''Привет, *{last_name}* *{first_name}*.'''
@@ -179,8 +183,8 @@ def find_user_in_db(username, first_name, last_name):
     :param last_name:
     :return:
     """
-    user = db.session.query(Users).filter(Users.username == f'{username}').first_or_404()
-    print(user)
+
+    user = db.session.query(Users).filter(Users.username == f'{username}').all()
     if not user:
         add_users_to_db(username, first_name, last_name)
 

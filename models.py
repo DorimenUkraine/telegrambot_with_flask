@@ -13,10 +13,6 @@ class Users(db.Model):
     created = db.Column(db.DateTime, default=datetime.now())
     tasks = db.relationship('Tasks', backref='tasks')
 
-    # Загоним данные в БД транзитом
-    # def __init__(self, *args, **kwargs):
-    #     super(Users, self).__init__(*args, **kwargs)
-
     def __init__(self, username, last_name, first_name):
         self.username = username
         self.last_name = last_name
@@ -38,14 +34,9 @@ class Tasks(db.Model):
     created_on = db.Column(db.DateTime, default=datetime.now())
     updated_on = db.Column(db.DateTime(), default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # Загоним данные в БД транзитом
-    def __init__(self, *args, **kwargs):
-        super(Tasks, self).__init__(*args, **kwargs)
-
-    # def __init__(self, name, last_name, first_name):
-    #     self.name = name
-    #     self.last_name = last_name
-    #     self.first_name = first_name
+    def __init__(self, name, owner_id):
+        self.owner_id = owner_id
+        self.name = name
 
     def __repr__(self):
         return '<Tasks {}>'.format(self.name)
