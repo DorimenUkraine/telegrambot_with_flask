@@ -16,6 +16,11 @@ SEND_MESSAGE = 'sendMessage'
 EDIT_MESSAGE_REPLY_MARKUP = 'editMessageReplyMarkup'
 TELEGRAM_URL = f'https://api.telegram.org/bot{TOKEN}/'
 
+
+############################### НАСТРОЙКИ РАСПОРЯДКА ДНЯ ПОЛЬЗОВАТЕЛЯ ############################################
+
+
+
 ############################### ЛОГГИРОВАНИЕ ############################################
 # Enable logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -70,7 +75,7 @@ def parse_text(chat_id, last_name, first_name, username, text_msg):
             logger.info(f"Пользователь {username} начал диалог.")
 
             try:
-                show_user(username, first_name, last_name)
+                find_user_in_db(username, first_name, last_name)
             except NameError:
                 print("user не отработал")
             except:
@@ -156,9 +161,9 @@ def write_json(data, filename='answer.json'):
         #  проблема с unicode error из-за текстов на русском языке
 
 
-def users_to_db(username, last_name, first_name):
+def add_users_to_db(username, last_name, first_name):
     """
-    Функция записи пользователей в БД
+    Функция добавления пользователя в БД
     :return:
     """
     data = Users(username, last_name, first_name)
@@ -166,7 +171,7 @@ def users_to_db(username, last_name, first_name):
     db.session.commit()
 
 
-def show_user(username, first_name, last_name):
+def find_user_in_db(username, first_name, last_name):
     """
     Функция для проверки наличия пользователя в базе и при отсутствии оного добавление
     :param username:
@@ -177,7 +182,7 @@ def show_user(username, first_name, last_name):
     user = db.session.query(Users).filter(Users.username == f'{username}').first_or_404()
     print(user)
     if not user:
-        users_to_db(username, first_name, last_name)
+        add_users_to_db(username, first_name, last_name)
 
 
 
