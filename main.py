@@ -175,18 +175,35 @@ def add_users_to_db(username, last_name, first_name):
     db.session.commit()
 
 
+def update_users_to_db(update_username, username, last_name, first_name):
+    """
+    Функция добавления пользователя в БД
+    :return:
+    """
+    user = Users.query.get(update_username)
+    user.first_name = f'{first_name}'
+    db.session.add(user)
+    db.session.commit()
+
+
 def find_user_in_db(username, first_name, last_name):
     """
     Функция для проверки наличия пользователя в базе и при отсутствии оного добавление
+    А также обновление данных, если они изменились в Телеграме
     :param username:
     :param first_name:
     :param last_name:
     :return:
     """
 
-    user = db.session.query(Users).filter(Users.username == f'{username}').all()
-    if not user:
+    user = db.session.query(Users).filter(Users.username == f'{username}').first()
+
+    if user is None or not user:
         add_users_to_db(username, first_name, last_name)
+    else:
+        # Тут еще можно в будущем сделать, чтобы проверять изменение данных пользователя
+        # и обновлять в БД. Пока без этого.
+        pass
 
 
 
