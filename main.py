@@ -1,12 +1,17 @@
-from flask.views import MethodView
-from flask import request
-import requests
 import json
-import os
 import logging
-from app import db, app
-from models import Users
+import os
+import time
+import requests
 from dotenv import load_dotenv
+from datetime import datetime, date, timedelta
+from flask import request
+from flask.views import MethodView
+from multiprocessing import Process
+
+from app import db, app
+from models import Users, Days, Chats, Tasks
+
 load_dotenv()
 
 ############################### НАСТРОЙКИ ПОДКЛЮЧЕНИЯ К ТЕЛЕГРАМУ ############################################
@@ -15,9 +20,7 @@ SEND_MESSAGE = 'sendMessage'
 EDIT_MESSAGE_REPLY_MARKUP = 'editMessageReplyMarkup'
 TELEGRAM_URL = f'https://api.telegram.org/bot{TOKEN}/'
 
-
 ############################### НАСТРОЙКИ РАСПОРЯДКА ДНЯ ПОЛЬЗОВАТЕЛЯ ############################################
-
 
 
 ############################### ЛОГГИРОВАНИЕ ############################################
@@ -65,90 +68,265 @@ def edit_message_reply_markup(params):
 def parse_text(chat_id, last_name, first_name, username, text_msg):
     """
     Передадим введенный пользователем в Телеге текст на парсинг
-    Пока умеем обрабатывать команды /start /help, /job
+    Пока умеем обрабатывать команды /start /help
     """
+    # Find user in DB. If it's not in DB - add. If it's already in DB - update data if change
+    try:
+        find_user_in_db(username, first_name, last_name)
+    except NameError:
+        logger.info("Локальное или глобальное имя не найдено")
+    except ImportError:
+        logger.info("Оператор import не может найти определение модуля!")
+    except ValueError:
+        logger.info(
+            "Встроенная операция или функция получает аргумент, тип которого правильный, но неправильно значение")
+    except:
+        logger.info("Не корректно работает работа с БД")
 
-    if '/' in text_msg:  # Для ориентира, что это команда, найдем в сообщении /
+    finally:
 
-        if text_msg == '/start':
-            logger.info(f"Пользователь {username} начал диалог.")
+        if '/' in text_msg:  # Для ориентира, что это команда, найдем в сообщении /
 
-            try:
-                find_user_in_db(username, first_name, last_name)
-            except NameError:
-                logger.info("Локальное или глобальное имя не найдено")
-            except ImportError:
-                logger.info("Оператор import не может найти определение модуля!")
-            except ValueError:
-                logger.info("Встроенная операция или функция получает аргумент, тип которого правильный, но неправильно значение")
-            except:
-                logger.info("Some other error occurred!")
+            if text_msg == '/start':
+                logger.info(f"Пользователь {username} начал диалог.")
 
-            finally:
+                user = db.session.query(Users).filter(Users.username == f'{username}').first()
+                owner_id = user.id
+
+                chat = db.session.query(Chats).filter(Chats.chat_id_go == f'{chat_id}').first()
+
+                if not chat or chat is None:
+                    add_chat_id_to_db(owner_id, chat_id)
 
                 message = f'''Привет, *{last_name}* *{first_name}*.'''
                 reply_markup = json.dumps(
-                    {'inline_keyboard': [[{'text': 'Начнём учёт нашего рабочего дня',
-                                           'callback_data': 'go'}]]})
+                    {'keyboard': [[{'text': 'Начнём учёт рабочего дня',
+                                    'callback_data': 'go'}]],
+                     'resize_keyboard': True,
+                     'one_time_keyboard': True})
+
                 return dict(chat_id=chat_id,
                             text=message,
                             parse_mode='Markdown',
                             reply_markup=reply_markup)
 
-        elif text_msg == '/help':
-            logger.info(f"Пользователь {username} запросил подсказку.")
+            elif text_msg == '/help':
+                logger.info(f"Пользователь {username} запросил подсказку.")
 
-            message = f'''Пока у нас нет документации'''
-            return dict(chat_id=chat_id,
-                        text=message,
-                        parse_mode='Markdown')
+                message = f'''Пока у нас нет документации'''
+                return dict(chat_id=chat_id,
+                            text=message,
+                            parse_mode='Markdown')
 
-        elif '/go' in text_msg:
-            logger.info(f"Пользователь {username} инициировал команду /go.")
-            message = f'''Ну что же, *{last_name}* *{first_name}*, приступим!'''
-            reply_markup = json.dumps({'inline_keyboard': [[{'text': 'текст3',
-                                                             'url': 'http://ya.ru'}]]})
-            return dict(chat_id=chat_id,
-                        text=message,
-                        parse_mode='Markdown',
-                        reply_markup=reply_markup)
+            else:
+                logger.info(f"Пользователь {username} ввел некорректную команду")
+
+                message = f'''*{last_name}* *{first_name}*, Вы ввели некорректную команду!'''
+
+                return dict(chat_id=chat_id,
+                            text=message,
+                            parse_mode='Markdown')
+
+        elif 'Начнём' in text_msg:
+            logger.info(f"Пользователь {username} нажал на кнопку Start.")
+
+            # Если написал "Начнём", тогда начнем его рабочий день
+            user = db.session.query(Users).filter(Users.username == f'{username}').first()
+
+            owner_id = user.id
+            day = db.session.query(Days).filter(Days.owner_id == owner_id, Days.day == date.today()).first()
+
+            if not day or day is None:
+                add_day_to_db(owner_id)
+
+                # Запускаем в параллельном потоке работу с задачами пользователя и при этом программе позволяем
+                # реагировать на другие команды
+
+                process_go = Process(target=working_time,
+                                     args=('Пользователь начал работу', last_name, first_name, owner_id, chat_id))
+
+                process_go.start()
+
+                message = f'''Добро!'''
+
+                return dict(chat_id=chat_id,
+                            text=message,
+                            parse_mode='Markdown')
+
+            else:
+                user = db.session.query(Users).filter(Users.username == f'{username}').first()
+                owner_id = user.id
+                chat = db.session.query(Chats).filter(Chats.owner_id == f'{owner_id}').first()
+                chat_id = chat.chat_id_go
+                print(chat_id)
+                message = f'''*{last_name}* *{first_name}*, Вы уже запустили сегодня рабочий день'''
+
+                return dict(chat_id=chat_id,
+                            text=message,
+                            parse_mode='Markdown')
+
+        elif 'Работаю' in text_msg:
+            logger.info(f"Пользователь {username} нажал на кнопку Работаю.")
+            message = f'''Добро!'''
+
+            # Если написал "Начнём", тогда начнем его рабочий день
+            user = db.session.query(Users).filter(Users.username == f'{username}').first()
+
+            owner_id = user.id
+            day = db.session.query(Days).filter(Days.owner_id == owner_id, Days.day == date.today()).first()
+
+            if not day or day is None or day.start == False:
+                add_day_to_db(owner_id)
+
+                # Запускаем в параллельном потоке работу с задачами пользователя и при этом программе позволяем
+                # реагировать на другие команды
+                process_go = Process(target=working_time,
+                                     args=('Пользователь начал работу', last_name, first_name, owner_id, chat_id))
+                process_go.start()
+                process_go.join()
+                print('Done.')
+
+                return dict(chat_id=chat_id,
+                            text=message,
+                            parse_mode='Markdown')
+
+            else:
+                user = db.session.query(Users).filter(Users.username == f'{username}').first()
+                owner_id = user.id
+                chat = db.session.query(Chats).filter(Chats.owner_id == f'{owner_id}').first()
+                chat_id = chat.chat_id_go
+                print(chat_id)
+                message = f'''*{last_name}* *{first_name}*, Вы уже запустили сегодня рабочий день'''
+
+                return dict(chat_id=chat_id,
+                            text=message,
+                            parse_mode='Markdown')
+
 
         else:
-            logger.info(f"Пользователь {username} ввел некорректную команду")
-
-            message = f'''*{last_name}* *{first_name}*, Вы ввели некорректную команду!'''
-            reply_markup = json.dumps({'inline_keyboard': [[{'text': 'текст4',
-                                                             'url': 'http://ya.ru'}]]})
-            return dict(chat_id=chat_id,
-                        text=message,
-                        parse_mode='Markdown',
-                        reply_markup=reply_markup)
-
-    else:
-        return None
+            return None
 
 
 def parse_markup_command(chat_id, last_name, first_name, username, message_id, callback_query):
     """
-    Передадим введенный пользователем в Телеге команды на парсинг
+    Передадим введенные пользователем в Телеге команды на парсинг
     Пока умеем обрабатывать команды: go
     """
 
-    if callback_query == 'go':
+    # Find user in DB. If it's not in DB - add. If it's already in DB - update data if change
+    try:
+        find_user_in_db(username, first_name, last_name)
+    except NameError:
+        logger.info("Локальное или глобальное имя не найдено")
+    except ImportError:
+        logger.info("Оператор import не может найти определение модуля!")
+    except ValueError:
+        logger.info(
+            "Встроенная операция или функция получает аргумент, тип которого правильный, но неправильно значение")
+    except:
+        logger.info("Не корректно работает работа с БД")
 
-        logger.info(f"Пользователь {username} нажал на кнопку go.")
-        # message = f'''Добро!'''
-        reply_markup = json.dumps({'inline_keyboard': [[{'text': 'текст_go',
-                                                         'url': 'http://ya.ru'}]]})
-        return dict(chat_id=chat_id,
-                    message_id=message_id,
-                    # text=message,
-                    parse_mode='Markdown',
-                    reply_markup=reply_markup)
+    finally:
 
-    else:
+        if callback_query == 'go':
 
-        return None
+            logger.info(f"Пользователь {username} нажал на кнопку go.")
+            message = f'''Добро!'''
+
+            # Если нажал на go, тогда начнем его рабочий день
+            user = db.session.query(Users).filter(Users.username == f'{username}').first()
+
+            owner_id = user.id
+            day = db.session.query(Days).filter(Days.owner_id == owner_id, Days.day == date.today()).first()
+
+            if not day or day is None or day.start == False:
+                add_day_to_db(owner_id)
+
+                # Запускаем в параллельном потоке работу с задачами пользователя и при этом программе позволяем
+                # реагировать на другие команды
+                process_go = Process(target=working_time,
+                                     args=('Пользователь начал работу', last_name, first_name, owner_id))
+                process_go.start()
+                process_go.join()
+
+                return dict(chat_id=chat_id,
+                            message_id=message_id,
+                            text=message,
+                            parse_mode='Markdown')
+
+            else:
+                user = db.session.query(Users).filter(Users.username == f'{username}').first()
+                owner_id = user.id
+                chat = db.session.query(Chats).filter(Chats.owner_id == f'{owner_id}').first()
+                chat_id = chat.chat_id_go
+                print(chat_id)
+                message = f'''*{last_name}* *{first_name}*, Вы уже запустили сегодня рабочий день'''
+
+                reply_markup = json.dumps({'remove_keyboard': True})
+
+                return dict(chat_id=chat_id,
+                            text=message,
+                            parse_mode='Markdown',
+                            reply_markup=reply_markup)
+
+
+        else:
+
+            return None
+
+
+############################### ФУНКЦИИ РАБОТЫ С ЗАДАЧАМИ ПОЛЬЗОВАТЕЛЯ ############################################
+def calculate_interval(hour, key):
+    # Convert all times in seconds for calculate
+    start_interval_in_seconds = hour * 60 * 60
+    now_in_seconds = (datetime.now().minute * 60) + (datetime.now().hour * 60 * 60) + datetime.now().second
+    time_for_working_in_seconds = int(timedelta(minutes=45).total_seconds())
+    how_much_work = now_in_seconds - start_interval_in_seconds
+
+    if now_in_seconds > start_interval_in_seconds and (now_in_seconds - start_interval_in_seconds) < (
+            time_for_working_in_seconds):
+        print(f'Уже {str(timedelta(seconds=how_much_work))} идет работа над следущей задачей: {key}')
+
+    elif time_for_working_in_seconds == (now_in_seconds - start_interval_in_seconds) < (
+            time_for_working_in_seconds + 20):
+        print('Время сделать паузу на 15 минут')
+
+
+def working_time(name_of_process, delay):
+    print('Process %s starting...' % name_of_process)
+
+    now_is = datetime.now()
+
+    # Start and finish day parameters
+    start_day = now_is.replace(hour=9, minute=0)
+    finish_day = now_is.replace(hour=20, minute=0)
+
+    # List of Schedule
+    schedule_working_list = {key: value for key, value in enumerate([hour for hour in range(9, 19)])}
+
+    # Table of Schedule
+    schedule_working_hours = {'0': 'Первая',
+                              '1': 'Вторая',
+                              '2': 'Третья',
+                              '3': 'Четвертая',
+                              '4': 'Пятая',
+                              '5': 'Шестая',
+                              '6': 'Седьмая',
+                              '7': 'Восьмая',
+                              '8': 'Девятая',
+                              '9': 'Десятая'}
+
+    while start_day.hour <= now_is.hour <= finish_day.hour:
+        time.sleep(delay)
+
+        for hour in schedule_working_list:
+            if now_is.hour == hour:
+                print(hour)
+                print(schedule_working_hours[f'{hour}'])
+
+                calculate_interval(hour, schedule_working_hours[f'{hour}'])
+
+    print('Process %s exiting...' % name_of_process)
 
 
 ############################### СЛУЖЕБНЫЕ ФУНКЦИИ ############################################
@@ -170,8 +348,8 @@ def add_users_to_db(username, last_name, first_name):
     Функция добавления пользователя в БД
     :return:
     """
-    data = Users(username, last_name, first_name)
-    db.session.add(data)
+    u = Users(username, last_name, first_name)
+    db.session.add(u)
     db.session.commit()
 
 
@@ -180,9 +358,48 @@ def update_users_to_db(update_username, username, last_name, first_name):
     Функция добавления пользователя в БД
     :return:
     """
-    user = Users.query.get(update_username)
-    user.first_name = f'{first_name}'
-    db.session.add(user)
+
+    # Добавить в будущем
+    pass
+
+
+def add_day_to_db(owner_id):
+    """
+    Функция добавления пользователя в БД
+    :return:
+    """
+    d = Days(owner_id)
+    db.session.add(d)
+    db.session.commit()
+
+
+def add_chat_id_to_db(owner_id, chat_id):
+    """
+    Функция добавления id чата в БД
+    :return:
+    """
+    c = Chats(owner_id, chat_id)
+    db.session.add(c)
+    db.session.commit()
+
+
+def update_chat_id_to_db(owner_id, chat_id):
+    """
+    Функция обновления id чата в БД
+    :return:
+    """
+    c = Chats.query.filter_by(owner_id=f'{owner_id}').update(dict(chat_id_go=f'{chat_id}'))
+    db.session.add(c)
+    db.session.commit()
+
+
+def add_task_to_db(owner_id, task_id):
+    """
+    Функция добавления id чата в БД
+    :return:
+    """
+    t = Tasks(owner_id, task_id)
+    db.session.add(t)
     db.session.commit()
 
 
@@ -197,14 +414,13 @@ def find_user_in_db(username, first_name, last_name):
     """
 
     user = db.session.query(Users).filter(Users.username == f'{username}').first()
-
-    if user is None or not user:
+    print(user)
+    if not user or user is None:
         add_users_to_db(username, first_name, last_name)
     else:
         # Тут еще можно в будущем сделать, чтобы проверять изменение данных пользователя
         # и обновлять в БД. Пока без этого.
         pass
-
 
 
 ############################### FLASK ############################################
@@ -236,6 +452,7 @@ class BotAPI(MethodView):
         # вытаскиваем из json нужные нам данные
         for key in resp:
 
+            # Проверим - это текст или команда через парсинг входящего массива и поиска подходящих конструкций
             if 'message' in key:
                 text_msg = resp['message']['text']
                 chat_id = resp['message']['chat']['id']
@@ -266,7 +483,7 @@ class BotAPI(MethodView):
 
                 # Если функция парсинга текста вернула какой-то ответ, тогда отправим его на отправку в Телегу обратно
                 if params:
-                    edit_message_reply_markup(params)
+                    send_message(params)
 
                 break
 
