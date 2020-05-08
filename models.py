@@ -1,4 +1,4 @@
-from __main__ import db, app
+from main import db, app
 from datetime import date, datetime
 
 
