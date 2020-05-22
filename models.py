@@ -1,4 +1,4 @@
-from main import db, app
+from app import db, app
 from datetime import date, datetime
 
 
@@ -40,7 +40,7 @@ class Days(db.Model):
         self.owner_id = owner_id
 
     def __repr__(self):
-        return '<Days {}>'.format(self.name)
+        return '<Days {}>'.format(self.owner_id)
 
 
 class Tasks(db.Model):
@@ -49,20 +49,21 @@ class Tasks(db.Model):
     __tablename__ = 'tasks'
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     owner_id = db.Column(db.Integer(), db.ForeignKey('users.id'))
-    day = db.Column(db.DateTime(), db.ForeignKey('days.day'), default=date.today())
+    day = db.Column(db.Date(), db.ForeignKey('days.day'), default=date.today())
     task_id = db.Column(db.String(120), index=True)
     start = db.Column(db.Boolean, default=False)
     finish = db.Column(db.Boolean, default=False)
+    work_or_not = db.Column(db.Boolean, default=False)
     created_on = db.Column(db.DateTime, default=datetime.now())
     updated_on = db.Column(db.DateTime(), default=datetime.utcnow, onupdate=datetime.utcnow)
     user_tasks = db.relationship("Users", back_populates="user_tasks")
 
     def __init__(self, owner_id, task_id):
         self.owner_id = owner_id
-        self.name = task_id
+        self.task_id = task_id
 
     def __repr__(self):
-        return '<Tasks {}>'.format(self.name)
+        return '<Tasks {}>'.format(self.task_id)
 
 
 class Chats(db.Model):
@@ -81,4 +82,4 @@ class Chats(db.Model):
         self.chat_id_go = chat_id
 
     def __repr__(self):
-        return '<Chats {}>'.format(self.name)
+        return '<Chats {}>'.format(self.chat_id)

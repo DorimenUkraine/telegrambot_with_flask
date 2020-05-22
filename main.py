@@ -8,6 +8,15 @@ from datetime import datetime, date, timedelta
 from flask import request
 from flask.views import MethodView
 from multiprocessing import Process
+import random, string
+
+
+# Работа с отладчиком: https://habr.com/ru/post/104086/
+# https://tproger.ru/translations/debugging-python-with-pdb/
+# https://youtu.be/N0xkFZv2Df0?t=582
+import pdb
+
+pdb.set_trace()
 
 from app import db, app
 from models import Users, Days, Chats, Tasks
@@ -88,14 +97,14 @@ def parse_text(chat_id, last_name, first_name, username, text_msg):
         if '/' in text_msg:  # Для ориентира, что это команда, найдем в сообщении /
 
             if text_msg == '/start':
-                logger.info(f"Пользователь {username} начал диалог.")
+                logger.info(f"Пользователь {username} написал в чат /start.")
 
-                user = db.session.query(Users).filter(Users.username == f'{username}').first()
-                owner_id = user.id
+                user_from_db = db.session.query(Users).filter(Users.username == f'{username}').first()
+                owner_id = user_from_db.id
 
-                chat = db.session.query(Chats).filter(Chats.chat_id_go == f'{chat_id}').first()
+                chat_from_db = db.session.query(Chats).filter(Chats.chat_id_go == f'{chat_id}').first()
 
-                if not chat or chat is None:
+                if not chat_from_db or chat_from_db is None:
                     add_chat_id_to_db(owner_id, chat_id)
 
                 message = f'''Привет, *{last_name}* *{first_name}*.'''
@@ -111,7 +120,7 @@ def parse_text(chat_id, last_name, first_name, username, text_msg):
                             reply_markup=reply_markup)
 
             elif text_msg == '/help':
-                logger.info(f"Пользователь {username} запросил подсказку.")
+                logger.info(f"Пользователь {username} написал в чат /help.")
 
                 message = f'''Пока у нас нет документации'''
                 return dict(chat_id=chat_id,
@@ -128,24 +137,22 @@ def parse_text(chat_id, last_name, first_name, username, text_msg):
                             parse_mode='Markdown')
 
         elif 'Начнём' in text_msg:
-            logger.info(f"Пользователь {username} нажал на кнопку Start.")
+            logger.info(f"Пользователь {username} написал в чате Начнём")
 
             # Если написал "Начнём", тогда начнем его рабочий день
-            user = db.session.query(Users).filter(Users.username == f'{username}').first()
+            user_from_db = db.session.query(Users).filter(Users.username == f'{username}').first()
+            owner_id = user_from_db.id
+            day_from_db = db.session.query(Days).filter(Days.owner_id == owner_id, Days.day == date.today()).first()
 
-            owner_id = user.id
-            day = db.session.query(Days).filter(Days.owner_id == owner_id, Days.day == date.today()).first()
-
-            if not day or day is None:
+            if not day_from_db or day_from_db is None:
                 add_day_to_db(owner_id)
+
+                day_from_db = db.session.query(Days).filter(Days.owner_id == owner_id, Days.day == date.today()).first()
+                day = day_from_db.day
 
                 # Запускаем в параллельном потоке работу с задачами пользователя и при этом программе позволяем
                 # реагировать на другие команды
-
-                process_go = Process(target=working_time,
-                                     args=('Пользователь начал работу', last_name, first_name, owner_id, chat_id))
-
-                process_go.start()
+                process_generator(last_name, first_name, owner_id, chat_id, day)
 
                 message = f'''Добро!'''
 
@@ -154,11 +161,18 @@ def parse_text(chat_id, last_name, first_name, username, text_msg):
                             parse_mode='Markdown')
 
             else:
-                user = db.session.query(Users).filter(Users.username == f'{username}').first()
-                owner_id = user.id
-                chat = db.session.query(Chats).filter(Chats.owner_id == f'{owner_id}').first()
-                chat_id = chat.chat_id_go
+                user_from_db = db.session.query(Users).filter(Users.username == f'{username}').first()
+                owner_id = user_from_db.id
+                chat_from_db = db.session.query(Chats).filter(Chats.owner_id == f'{owner_id}').first()
+                chat_id = chat_from_db.chat_id_go
                 print(chat_id)
+
+                day = day_from_db.day
+
+                # Запускаем в параллельном потоке работу с задачами пользователя и при этом программе позволяем
+                # реагировать на другие команды
+                process_generator(last_name, first_name, owner_id, chat_id, day)
+
                 message = f'''*{last_name}* *{first_name}*, Вы уже запустили сегодня рабочий день'''
 
                 return dict(chat_id=chat_id,
@@ -166,42 +180,47 @@ def parse_text(chat_id, last_name, first_name, username, text_msg):
                             parse_mode='Markdown')
 
         elif 'Работаю' in text_msg:
-            logger.info(f"Пользователь {username} нажал на кнопку Работаю.")
+            logger.info(f"Пользователь {username} написал в чате Работаю.")
             message = f'''Добро!'''
 
-            # Если написал "Начнём", тогда начнем его рабочий день
-            user = db.session.query(Users).filter(Users.username == f'{username}').first()
+            # Если написал "Работаю", тогда начнем его рабочий день
+            user_from_db = db.session.query(Users).filter(Users.username == f'{username}').first()
 
-            owner_id = user.id
-            day = db.session.query(Days).filter(Days.owner_id == owner_id, Days.day == date.today()).first()
+            owner_id = user_from_db.id
+            day_from_db = db.session.query(Days).filter(Days.owner_id == owner_id, Days.day == date.today()).first()
 
-            if not day or day is None or day.start == False:
+            if not day_from_db or day_from_db is None or day_from_db.start == False:
                 add_day_to_db(owner_id)
+
+                day_from_db = db.session.query(Days).filter(Days.owner_id == owner_id, Days.day == date.today()).first()
+                day = day_from_db.day
 
                 # Запускаем в параллельном потоке работу с задачами пользователя и при этом программе позволяем
                 # реагировать на другие команды
-                process_go = Process(target=working_time,
-                                     args=('Пользователь начал работу', last_name, first_name, owner_id, chat_id))
-                process_go.start()
-                process_go.join()
-                print('Done.')
+                process_generator(last_name, first_name, owner_id, chat_id, day)
 
                 return dict(chat_id=chat_id,
                             text=message,
                             parse_mode='Markdown')
 
             else:
-                user = db.session.query(Users).filter(Users.username == f'{username}').first()
-                owner_id = user.id
-                chat = db.session.query(Chats).filter(Chats.owner_id == f'{owner_id}').first()
-                chat_id = chat.chat_id_go
+                user_from_db = db.session.query(Users).filter(Users.username == f'{username}').first()
+                owner_id = user_from_db.id
+                chat_from_db = db.session.query(Chats).filter(Chats.owner_id == f'{owner_id}').first()
+                chat_id = chat_from_db.chat_id_go
                 print(chat_id)
                 message = f'''*{last_name}* *{first_name}*, Вы уже запустили сегодня рабочий день'''
+
+                day_from_db = db.session.query(Days).filter(Days.owner_id == owner_id, Days.day == date.today()).first()
+                day = day_from_db.day
+
+                # Запускаем в параллельном потоке работу с задачами пользователя и при этом программе позволяем
+                # реагировать на другие команды
+                process_generator(last_name, first_name, owner_id, chat_id, day)
 
                 return dict(chat_id=chat_id,
                             text=message,
                             parse_mode='Markdown')
-
 
         else:
             return None
@@ -234,20 +253,20 @@ def parse_markup_command(chat_id, last_name, first_name, username, message_id, c
             message = f'''Добро!'''
 
             # Если нажал на go, тогда начнем его рабочий день
-            user = db.session.query(Users).filter(Users.username == f'{username}').first()
+            user_from_db = db.session.query(Users).filter(Users.username == f'{username}').first()
 
-            owner_id = user.id
-            day = db.session.query(Days).filter(Days.owner_id == owner_id, Days.day == date.today()).first()
+            owner_id = user_from_db.id
+            day_from_db = db.session.query(Days).filter(Days.owner_id == owner_id, Days.day == date.today()).first()
 
-            if not day or day is None or day.start == False:
+            if not day_from_db or day_from_db is None or day_from_db.start == False:
                 add_day_to_db(owner_id)
+
+                day_from_db = db.session.query(Days).filter(Days.owner_id == owner_id, Days.day == date.today()).first()
+                day = day_from_db.day
 
                 # Запускаем в параллельном потоке работу с задачами пользователя и при этом программе позволяем
                 # реагировать на другие команды
-                process_go = Process(target=working_time,
-                                     args=('Пользователь начал работу', last_name, first_name, owner_id))
-                process_go.start()
-                process_go.join()
+                process_generator(last_name, first_name, owner_id, chat_id, day)
 
                 return dict(chat_id=chat_id,
                             message_id=message_id,
@@ -255,19 +274,26 @@ def parse_markup_command(chat_id, last_name, first_name, username, message_id, c
                             parse_mode='Markdown')
 
             else:
-                user = db.session.query(Users).filter(Users.username == f'{username}').first()
-                owner_id = user.id
-                chat = db.session.query(Chats).filter(Chats.owner_id == f'{owner_id}').first()
-                chat_id = chat.chat_id_go
+                user_from_db = db.session.query(Users).filter(Users.username == f'{username}').first()
+                owner_id = user_from_db.id
+                chat_from_db = db.session.query(Chats).filter(Chats.owner_id == f'{owner_id}').first()
+                chat_id = chat_from_db.chat_id_go
                 print(chat_id)
                 message = f'''*{last_name}* *{first_name}*, Вы уже запустили сегодня рабочий день'''
 
                 reply_markup = json.dumps({'remove_keyboard': True})
 
-                return dict(chat_id=chat_id,
-                            text=message,
-                            parse_mode='Markdown',
-                            reply_markup=reply_markup)
+                day_from_db = db.session.query(Days).filter(Days.owner_id == owner_id, Days.day == date.today()).first()
+                day = day_from_db.day
+
+                # Запускаем в параллельном потоке работу с задачами пользователя и при этом программе позволяем
+                # реагировать на другие команды
+                process_generator(last_name, first_name, owner_id, chat_id, day)
+
+            return dict(chat_id=chat_id,
+                        text=message,
+                        parse_mode='Markdown',
+                        reply_markup=reply_markup)
 
 
         else:
@@ -276,23 +302,97 @@ def parse_markup_command(chat_id, last_name, first_name, username, message_id, c
 
 
 ############################### ФУНКЦИИ РАБОТЫ С ЗАДАЧАМИ ПОЛЬЗОВАТЕЛЯ ############################################
-def calculate_interval(hour, key):
+def calculate_interval(hour, key, last_name, first_name, owner_id, chat_id, day, name_of_work):
     # Convert all times in seconds for calculate
     start_interval_in_seconds = hour * 60 * 60
     now_in_seconds = (datetime.now().minute * 60) + (datetime.now().hour * 60 * 60) + datetime.now().second
     time_for_working_in_seconds = int(timedelta(minutes=45).total_seconds())
     how_much_work = now_in_seconds - start_interval_in_seconds
-
+    print('''Calculate is working''')
     if now_in_seconds > start_interval_in_seconds and (now_in_seconds - start_interval_in_seconds) < (
             time_for_working_in_seconds):
-        print(f'Уже {str(timedelta(seconds=how_much_work))} идет работа над следущей задачей: {key}')
+
+        task_from_db = db.session.query(Tasks).filter(Tasks.owner_id == f'{owner_id}', Tasks.day == f'{day}',
+                                                      Tasks.task_id == f'{key}').first()
+        print(task_from_db)
+        if not task_from_db or task_from_db is None or task_from_db.task_id != f'{key}':
+
+            add_task_to_db(owner_id, key)
+
+            work_or_not(how_much_work, last_name, first_name, chat_id, name_of_work, key, day, owner_id)
+
+        else:
+
+            work_or_not(how_much_work, last_name, first_name, chat_id, name_of_work, key, day, owner_id)
 
     elif time_for_working_in_seconds == (now_in_seconds - start_interval_in_seconds) < (
             time_for_working_in_seconds + 20):
-        print('Время сделать паузу на 15 минут')
+
+        print('''Time to relax''')
+        time_for_relax(last_name, first_name, chat_id)
 
 
-def working_time(name_of_process, delay):
+def work_or_not(how_much_work, last_name, first_name, chat_id, name_of_work, key, day, owner_id):
+    if how_much_work <= 300:
+
+        work_or_not_from_db = db.session.query(Tasks).filter(Tasks.owner_id == f'{owner_id}', Tasks.day == f'{day}',
+                                                             Tasks.task_id == f'{key}').first()
+        print(work_or_not_from_db)
+        if not work_or_not_from_db.work_or_not:
+            print(work_or_not_from_db.work_or_not)
+            update_task_work_or_not_to_db(owner_id, key, day)
+
+            message = f'''*{last_name}* *{first_name}*, Вы уже {str(timedelta(seconds=how_much_work))} должны работать над задачей: {name_of_work}. Нажмите на кнопку ниже, чтобы зафиксировать Вашу работу. Осталось {how_much_work - 300} секунд, чтобы успеть зафиксировать факт работы.'''
+
+            reply_markup = json.dumps(
+                {'keyboard': [[{'text': 'Работаю. Все ок.',
+                                'callback_data': 'user_is_working'}]],
+                 'resize_keyboard': True,
+                 'one_time_keyboard': True})
+
+            params = dict(chat_id=chat_id,
+                          text=message,
+                          parse_mode='Markdown',
+                          reply_markup=reply_markup)
+
+            send_message(params)
+
+    else:
+
+        work_or_not_from_db = db.session.query(Tasks).filter(Tasks.owner_id == f'{owner_id}', Tasks.day == f'{day}',
+                                                             Tasks.task_id == f'{key}').first()
+        print(work_or_not_from_db)
+        if not work_or_not_from_db.work_or_not:
+            print(work_or_not_from_db.work_or_not)
+            update_task_work_or_not_to_db(owner_id, key, day)
+
+            message = f'''*{last_name}* *{first_name}*, Вы уже {str(timedelta(seconds=how_much_work))} должны работать над задачей: {name_of_work}. Вы не успели зафиксировать работы и теперь она не будет засчитана'''
+
+            params = dict(chat_id=chat_id,
+                          text=message,
+                          parse_mode='Markdown')
+
+            send_message(params)
+
+
+def time_for_relax(last_name, first_name, chat_id):
+    message = f'''*{last_name}* *{first_name}*, пора сделать перерыв. Нажмите на кнопку ниже, чтобы зафиксировать факт завершения работы.'''
+
+    reply_markup = json.dumps(
+        {'keyboard': [[{'text': 'Отдыхаю',
+                        'callback_data': 'user_is_relaxing'}]],
+         'resize_keyboard': True,
+         'one_time_keyboard': True})
+
+    params = dict(chat_id=chat_id,
+                  text=message,
+                  parse_mode='Markdown',
+                  reply_markup=reply_markup)
+
+    send_message(params)
+
+
+def working_time(name_of_process, last_name, first_name, owner_id, chat_id, day, delay=15):
     print('Process %s starting...' % name_of_process)
 
     now_is = datetime.now()
@@ -319,17 +419,24 @@ def working_time(name_of_process, delay):
     while start_day.hour <= now_is.hour <= finish_day.hour:
         time.sleep(delay)
 
-        for hour in schedule_working_list:
-            if now_is.hour == hour:
-                print(hour)
-                print(schedule_working_hours[f'{hour}'])
+        for key, hour in schedule_working_list.items():
 
-                calculate_interval(hour, schedule_working_hours[f'{hour}'])
+            if now_is.hour == hour:
+                calculate_interval(hour, key, last_name, first_name, owner_id, chat_id, day,
+                                   schedule_working_hours.get(f'{key}'))
 
     print('Process %s exiting...' % name_of_process)
 
 
 ############################### СЛУЖЕБНЫЕ ФУНКЦИИ ############################################
+def process_generator(last_name, first_name, owner_id, chat_id, day):
+    tmp = random.random()
+    print(tmp)
+    pn = Process(target=working_time,
+                 args=(f'просчет работы пользователя {tmp}', last_name, first_name, owner_id, chat_id, day))
+    pn.start()
+
+
 def write_json(data, filename='answer.json'):
     """
     Функция для записи полученных ответов в файл для последующего анализа получемых данных
@@ -403,6 +510,17 @@ def add_task_to_db(owner_id, task_id):
     db.session.commit()
 
 
+def update_task_work_or_not_to_db(owner_id, key, day):
+    """
+    Функция обновления учета времени задачи в БД
+    :return:
+    """
+    t = db.session.query(Tasks).filter(Tasks.owner_id == f'{owner_id}', Tasks.task_id == f'{key}',
+                                       Tasks.day == f'{day}').first().update({'work_or_not': True})
+    db.session.add(t)
+    db.session.commit()
+
+
 def find_user_in_db(username, first_name, last_name):
     """
     Функция для проверки наличия пользователя в базе и при отсутствии оного добавление
@@ -413,9 +531,9 @@ def find_user_in_db(username, first_name, last_name):
     :return:
     """
 
-    user = db.session.query(Users).filter(Users.username == f'{username}').first()
-    print(user)
-    if not user or user is None:
+    user_from_db = db.session.query(Users).filter(Users.username == f'{username}').first()
+    print(user_from_db)
+    if not user_from_db or user_from_db is None:
         add_users_to_db(username, first_name, last_name)
     else:
         # Тут еще можно в будущем сделать, чтобы проверять изменение данных пользователя
